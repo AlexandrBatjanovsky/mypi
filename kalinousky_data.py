@@ -18,7 +18,7 @@ from prot_utils import AminsCode
 #import sys
 
 class ProtContactDataSet(Dataset):
-    def __init__(self, dat_files_csv: str, test_mode = False , num_iters=100):
+    def __init__(self, dat_files_csv: str, test_mode = False, min_seq_len = 50, num_iters=100):
         self.dat_files_csv = dat_files_csv
         self.test_mode = test_mode
         self.num_iters = num_iters

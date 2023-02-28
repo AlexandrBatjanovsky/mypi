@@ -1,0 +1,20 @@
+{
+    "model": {
+        "type": "kalinousky",
+        "num_bloks": 4,
+        "nlin": "elu",
+        "loss": "l2",
+        "val_losses": ["l1", "l2", "bce"]
+    },
+    "data": {
+        "tcs": "/csv1",
+        "vcs": "/csv2",
+        "minseqlen": 90
+    },
+    "param": {
+        "epochs": 100
+        "batch": 12,
+        "learn_rate": 1e-3,
+        "num_iters": 100
+    }
+}

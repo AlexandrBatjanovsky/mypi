@@ -6,71 +6,78 @@ Created on Thu Feb 23 21:21:38 2023
 @author: alexandersn
 """
 
-import os
-import time
-
-import numpy as np
-
+#import time
+#import os
+from pathlib import Path
 import logging
+
+#import numpy
 
 import torch
 from torch.utils.data import DataLoader
-from deephd_losses import build_loss_by_name
-from kalinousky_model import ASPPResNetSE
-#from kalinousky_data import ProtContactDataSet
+from kalinousky_data import ProtContactDataSet
 from pytorch_lightning import LightningModule
-import pytorch_lightning as pl
+from segmentation_models_pytorch.utils.losses import DiceLoss, JaccardLoss
+
+from kalinousky_model import ASPPResNetSE
+
+def build_loss_by_name(loss_name: str) -> torch.Module:
+    if loss_name == 'bce':
+        return torch.BCEWithLogitsLoss()
+    elif loss_name == 'l1':
+        return torch.L1Loss()
+    elif loss_name == 'l2':
+        return torch.MSELoss()
+    # elif loss_name == 'bcedice':
+    #     return BCEDiceLoss()
+    # elif loss_name == 'bcejaccard':
+    #     return BCEJaccardLoss()
+    elif loss_name == 'dice':
+        return DiceLoss()
+    elif loss_name == 'jaccard':
+        return JaccardLoss()
+    else:
+        raise NotImplementedError
 
 
+#def _get_random_seed():
+#    seed = int(time.time() * 100000) % 10000000 + os.getpid()
+#    return seed
 
-def _get_random_seed():
-    seed = int(time.time() * 100000) % 10000000 + os.getpid()
-    return seed
-
-
-def worker_init_fn_random(idx):
-    seed_ = _get_random_seed() + idx
-    torch.manual_seed(seed_)
-    np.random.seed(seed_)
+#def worker_init_fn_random(idx):
+#    seed_ = _get_random_seed() + idx
+#    torch.manual_seed(seed_)
+#    np.random.seed(seed_)
 
 
 class DeepHDPipeline(LightningModule):
 
-    def __init__(self, path_cfg: str, num_workers=8):
+    def __init__(self, conf: dict, num_workers=4):
         super().__init__()
-        self.path_cfg = path_cfg
         self.num_workers = num_workers
-        self.cfg = load_config(self.path_cfg)
+        self.cfg = conf
         self.model_prefix = self.cfg['model']['type']
         self.model = ASPPResNetSE(inp=43, out=1,
                                   nlin=self.cfg['model']['nlin'],
                                   num_stages=self.cfg['model']['num_stages'])
         self.trn_loss = build_loss_by_name(self.cfg['loss'])
-        self.val_losses = {}
-        self.val_losses['val_loss'] = build_loss_by_name(self.cfg['loss'])
-        for x in self.cfg['val_losses']:
-            self.val_losses[f'val_loss_{x}'] = build_loss_by_name(x)
+        self.val_loss = build_loss_by_name(self.cfg['loss'])
 
-    def _get_model_prefix(self) -> str:
-        ret = '{}_s{}_{}'.format(self.cfg['model']['type'],
-                                 self.cfg['model']['num_stages'],
-                                 self.cfg['model']['nlin'])
-        return ret
+        model_prefix = '{}_s{}_{}'.format(self.cfg['model']['type'],
+                         self.cfg['model']['num_stages'],
+                         self.cfg['model']['nlin'])
 
-    def build(self, model_dir='models_last1'):
-
-        # path_trn = self.cfg['trn_abs']
-        # path_val = self.cfg['val_abs']
-        # self.dataset_trn = DHDDataset(path_idx=self.cfg['trn_abs'], crop_size=self.cfg['crop_size'],
-        #                               params_aug=self.cfg['aug'], test_mode=False, num_fake_iters=self.cfg['iter_per_epoch']).build()
-        # self.dataset_val = DHDDataset(path_idx=self.cfg['val_abs'], crop_size=self.cfg['crop_size'],
-        #                               params_aug=None, test_mode=True).build()
-        model_prefix = self._get_model_prefix()
-        self.path_model = os.path.join(self.cfg['wdir'], model_dir,
-                                       os.path.basename(self.path_cfg) + '_model_' + model_prefix + '_l{}'.format(self.cfg['loss']))
+        self.path_model = Path(self.cfg['wdir'], "models_lastl",
+                               Path(self.path_cfg).name + '_model_' + model_prefix + '_l{}'.format(self.cfg['loss']))
         logging.info(f'Pipeline:\n\nmodel = {self.model}\n\tloss-train = {self.trn_loss}\n\tloss-val = {self.val_losses}')
-        return self
 
+        self.dataset_trn = ProtContactDataSet(dat_files_csv=self.cfg["data"]["tcs"], test_mode=False,
+                                              min_seq_len = self.cfg["data"]["minseqlen"], num_iters=self.cfg['num_iters'])
+        
+        self.dataset_val = ProtContactDataSet(dat_files_csv=self.cfg["data"]["vcs"], test_mode=True,
+                                              min_seq_len = self.cfg["data"]["minseqlen"])
+        return self 
+        
     def forward(self, x):
         return self.model(x)
 
@@ -79,9 +86,8 @@ class DeepHDPipeline(LightningModule):
         y_gt = batch['out'].type(torch.float32)
         y_pr = self.model(x)
         loss = self.trn_loss(y_pr, y_gt)
-        tensorboard_logs = {'train_loss': loss}
-        return {'loss': loss, 'log': tensorboard_logs}
-        # return {'loss': tensorboard_logs}
+        self.log('train_loss', loss, prog_bar=True, on_step=True, on_epoch=True)
+        return loss
 
     # def training_end(self, outputs):
     #     keys_ = list(outputs[0].keys())
@@ -97,30 +103,20 @@ class DeepHDPipeline(LightningModule):
         x = batch['inp']
         y_gt = batch['out'].type(torch.float32)
         y_pr = self.model(x)
-        ret = {loss_name: loss_func(y_pr, y_gt) for loss_name, loss_func in self.val_losses.items()}
-        return ret
-
-    def validation_end(self, outputs):
-        keys_ = list(outputs[0].keys())
-        ret_avg = {f'{k}': torch.stack([x[k] for x in outputs]).mean() for k in keys_}
-        tensorboard_logs = ret_avg
-        ret = {'log': tensorboard_logs}
-        return ret
+        loss = self.val_loss(y_pr, y_gt)
+        self.log('valid_loss', loss, prog_bar=True, on_step=True, on_epoch=True)
+        return loss
 
     def configure_optimizers(self):
-        ret = torch.optim.Adam(self.model.parameters(), lr=1e-4)
+        ret = torch.optim.Adam(self.parameters, lr=self.cfg["param"]["learn_rate"])
         return ret
 
-    @pl.data_loader
     def train_dataloader(self):
         ret = DataLoader(self.dataset_trn, num_workers=self.num_workers,
-                         batch_size=self.cfg['batch_size'],
-                         worker_init_fn=worker_init_fn_random)  # , collate_fn=skip_none_collate)
+                         batch_size=self.cfg["param"]["batch"])
         return ret
 
-    @pl.data_loader
     def val_dataloader(self):
         ret = DataLoader(self.dataset_val, num_workers=self.num_workers,
-                         batch_size=self.cfg['batch_size_val'],
-                         worker_init_fn=worker_init_fn_random)  # , collate_fn=skip_none_collate)
+                         batch_size=self.cfg["param"]["batch"])
         return ret
