@@ -193,6 +193,7 @@ class ASPPResNetSE(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
+        print(x.shape)
         x = self.body(x)
         x = self.out_block(x)
         if self.num_out == 1:

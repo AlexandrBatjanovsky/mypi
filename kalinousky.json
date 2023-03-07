@@ -4,17 +4,23 @@
         "num_bloks": 4,
         "nlin": "elu",
         "loss": "l2",
-        "val_losses": ["l1", "l2", "bce"]
+        "val_losses": ["l1", "l2", "bce"],
+        "num_stages": 4
     },
     "data": {
-        "tcs": "/csv1",
-        "vcs": "/csv2",
+        "tcs": "tempcsv",
+        "vcs": "tempcsv",
+        "null_value": 0,
         "minseqlen": 90
     },
     "param": {
-        "epochs": 100
-        "batch": 12,
+        "epochs": 100,
+        "batch": 16,
         "learn_rate": 1e-3,
         "num_iters": 100
+    },
+    "runs": {
+        "checkpoint": "",
+        "wdir": ""
     }
 }
