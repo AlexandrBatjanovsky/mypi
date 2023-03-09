@@ -6,12 +6,12 @@ Created on Thu Feb 23 21:21:38 2023
 @author: alexandersn
 """
 
-import time
-import os
+#import time
+#import os
 from pathlib import Path
 import logging
 
-import numpy
+#import numpy
 
 import torch
 from torch.utils.data import DataLoader
@@ -21,15 +21,36 @@ from segmentation_models_pytorch.utils.losses import DiceLoss, JaccardLoss
 
 from kalinousky_model import ASPPResNetSE
 
-def _get_random_seed():
-    seed = int(time.time() * 100000) % 10000000 + os.getpid()
-    return seed
+#def _get_random_seed():
+#    seed = int(time.time() * 100000) % 10000000 + os.getpid()
+#    return seed
 
+#def worker_init_fn_random(idx):
+#    seed_ = _get_random_seed() + idx
+#    torch.manual_seed(seed_)
+#    numpy.random.seed(seed_)
 
-def worker_init_fn_random(idx):
-    seed_ = _get_random_seed() + idx
-    torch.manual_seed(seed_)
-    numpy.random.seed(seed_)
+def collate_fn_protcases(batch):
+    # edit fill
+    print("!!!!!", len(batch))
+    fill_value = 0
+    tail_shape = batch[0]["inp"].shape[2:]
+    max_len = max([hdim["inp"].shape[0] for hdim in batch])
+    Collate_Batch_Inp = []
+    Collate_Batch_Out = []
+    for i in range(len(batch)):
+        cur_len = batch[i]["inp"].shape[0]
+        inpa = torch.cat((
+                                        torch.cat((torch.Tensor(batch[i]["inp"]), torch.full(((max_len-cur_len, cur_len)+tail_shape), fill_value))), 
+                                        torch.full(((max_len, max_len-cur_len)+tail_shape), fill_value)), 
+                                       dim=1)
+        oupa = torch.cat((
+                                        torch.cat((torch.Tensor(batch[i]["out"]), torch.full(((max_len-cur_len, cur_len)           ), fill_value))), 
+                                        torch.full(((max_len, max_len-cur_len)           ), fill_value)), 
+                                       dim=1)
+        Collate_Batch_Inp.append(inpa)
+        Collate_Batch_Out.append(oupa)
+    return Collate_Batch_Inp, Collate_Batch_Out
 
 def build_loss_by_name(loss_name: str) -> torch.nn.Module:
     if loss_name == "bce":
@@ -91,10 +112,11 @@ class DeepHDPipeline(LightningModule):
         return self.model(x)
 
     def training_step(self, batch, batch_nb):
-        x = batch["inp"]
-        y_gt = batch["out"].type(torch.float32)
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        x, y = batch
+        #y = y.type(torch.float32)
         y_pr = self.model(x)
-        loss = self.trn_loss(y_pr, y_gt)
+        loss = self.trn_loss(y_pr, y)
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         return loss
 
@@ -109,11 +131,18 @@ class DeepHDPipeline(LightningModule):
     #     return ret
 
     def validation_step(self, batch, batch_nb):
-        x = batch["inp"]
-        y_gt = batch["out"].type(torch.float32)
+        print(len(batch), batch_nb)
+        x, y = batch
+        #y = y.type(torch.float32)
         y_pr = self.model(x)
-        loss = self.val_loss(y_pr, y_gt)
+        loss = self.trn_loss(y_pr, y)
         self.log("valid_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+
+        #x = batch["inp"]
+        #y_gt = batch["out"].type(torch.float32)
+        #y_pr = self.model(x)
+        #loss = self.val_loss(y_pr, y_gt)
+        #self.log("valid_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         return loss
 
     def configure_optimizers(self):
@@ -123,11 +152,11 @@ class DeepHDPipeline(LightningModule):
     def train_dataloader(self):
         ret = DataLoader(self.dataset_trn, num_workers=self.num_workers,
                          batch_size=self.cfg["param"]["batch"], 
-                         worker_init_fn=worker_init_fn_random)
+                         collate_fn=collate_fn_protcases)
         return ret
 
     def val_dataloader(self):
         ret = DataLoader(self.dataset_val, num_workers=self.num_workers,
                          batch_size=self.cfg["param"]["batch"],
-                         worker_init_fn=worker_init_fn_random)
+                         collate_fn=collate_fn_protcases)
         return ret

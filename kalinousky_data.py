@@ -14,10 +14,12 @@ from torch.utils.data import Dataset
 import logging
 from joblib import load
 from pathlib import Path
-#import time
+import time
 import sys
 
 from prot_utils import AminsCode
+
+import matplotlib.pyplot as plt
 
 class ProtContactDataSet(Dataset):
     def __init__(self, dat_files_csv: str, crop = 0, test_mode = False, num_iters=100):
@@ -35,8 +37,6 @@ class ProtContactDataSet(Dataset):
         for c_rec in self.CSVFileData.groupby("filename"):
             jbl_dat = load(c_rec[0])
             for index, row in c_rec[1].iterrows():
-                print(type(row["imodel"]))  # debug
-                sys.exit()                  # debug
                 self.data.append({
                                     "head": [row["struct"], row["imodel"], row["chain1"], row["chain2"]],
                                     "inp": {"seq1": jbl_dat[row["imodel"]]["Seqs"][row["chain1"]],
@@ -59,11 +59,12 @@ class ProtContactDataSet(Dataset):
             return TensorSeq
         
         sample = self.data[item]
+        #print(sample["inp"])
         # A1 and B1
         # [internal dis[SxS], 2*aminotable sequence code layers[SxS]]
         MSeg1 = numpy.dstack([sample["inp"]["in_dis1"][..., None], 
                               AminsCodeLine_to_AminsCodeLayers(sample["inp"]["seq1"]).astype(numpy.float32)])
-        
+
         MSeg2 = numpy.dstack([sample["inp"]["in_dis2"][..., None], 
                               AminsCodeLine_to_AminsCodeLayers(sample["inp"]["seq2"]).astype(numpy.float32)])
 
@@ -76,10 +77,15 @@ class ProtContactDataSet(Dataset):
         MSeg2 = numpy.concatenate((numpy.zeros((len(sample["inp"]["seq2"]), 
                                                 len(sample["inp"]["seq1"]), 
                                                 len(AminsCode)*2+1), dtype = numpy.float32),        MSeg2), axis=1)
+
+        OSeg1 = numpy.concatenate((numpy.zeros((len(sample["inp"]["seq1"]), len(sample["inp"]["seq1"]))), sample["out"]), axis=1)
+        OSeg2 = numpy.concatenate((numpy.transpose(sample["out"]), numpy.zeros((len(sample["inp"]["seq2"]), len(sample["inp"]["seq2"])))), axis=1)
+        
+        #print(OSeg1.shape, OSeg2.shape, sample["inp"]["in_dis1"].shape)
         ret = {
                 "head": sample["head"],
                 "inp": numpy.concatenate((MSeg1, MSeg2), axis = 0),
-                "out": sample["out"]
+                "out": numpy.concatenate((OSeg1, OSeg2), axis = 0)
             }
         #logging.info("Data echo " + str(sample["head"]) + str(ret["inp"].shape))
         return ret
@@ -90,21 +96,37 @@ class ProtContactDataSet(Dataset):
         else:
             return self.num_iters
 
-def collate_fn_padd(batch):
-    least_shape = batch[0].shape[2:]
-    m_length = max([hdim.shape[0] for hdim in batch])
-    all_shape = [len(batch), m_length, m_length] + least_shape
-    col_batch = torch.full(all_shape, fill_value = 0)
-    for i in range(len(batch)):
-        col_batch[i, m_length//2 - batch[i].shape[0]//2:, m_length//2 - batch[i].shape[0]//2:, ...] = batch[i]
-    return col_batch
-
+def test_collate_fn_padd(Datas, check_inds: list):
+    curbatch = []
+    for i in check_inds:
+        curbatch.append([Datas[i]["inp"], Datas[i]["out"]])
+        print(curbatch[-1][0].shape, curbatch[-1][1].shape)
+    max_len = max([hdim[0].shape[0] for hdim in curbatch])
+    tail_shape = curbatch[0][0].shape[2:]
+    for i in range(len(curbatch)):
+        cur_len = curbatch[i][0].shape[0]
+        #print(cur_len, max_len, (max_len-cur_len, cur_len)+tail_shape)
+        #print(torch.full(((max_len-cur_len, cur_len)+tail_shape), 0).shape)
+        u = torch.cat((torch.cat((torch.Tensor(curbatch[i][0]), torch.full(((max_len-cur_len, cur_len)+tail_shape), 0))), torch.full(((max_len, max_len-cur_len)+tail_shape), 0)), dim=1)
+        o = torch.cat((torch.cat((torch.Tensor(curbatch[i][1]), torch.full(((max_len-cur_len, cur_len)),            0))), torch.full(((max_len, max_len-cur_len))           , 0)), dim=1)
+        print("!!!", Datas[i]["out"].shape, o.shape)
+        plt.pcolormesh(o, cmap='inferno')
+        plt.show()       
+    sys.exit()
+        
 if __name__ == '__main__':
+    numpy.set_printoptions(threshold=numpy.inf, linewidth=numpy.inf)
     logging.basicConfig(filename= str(Path(__file__).with_suffix(".log").name), filemode='w', level = logging.INFO, force=True,
                     format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S')
     logging.captureWarnings(capture=True)    
     testData = ProtContactDataSet("tempcsv", test_mode = True)
-    for eve in range(len(testData)):
-        acc = testData[eve]
-        logging.info(str(acc["inp"].shape) + "\n" + numpy.array2string(acc["out"], max_line_width = 1000, edgeitems = 10, threshold=500000))
-        sys.exit()
+    t_all = t = time.time()
+    # test collate
+    for bi in range(len(testData)//20):
+        test_collate_fn_padd(testData, [i for i in range(bi*20, bi*20+20)])
+    logging.info(time.time()-t_all)
+    
+    # test __getitem__
+    sample = testData[0]
+    plt.pcolormesh(sample["out"], cmap='inferno')
+    plt.show()

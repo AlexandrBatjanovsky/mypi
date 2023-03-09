@@ -22,7 +22,7 @@ def main_train():
     logging.basicConfig(filename= str(Path(__file__).with_suffix(".log").name), filemode='w', level = logging.INFO, force=True,
                     format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S')
     cfg = json.load(open("kalinousky.json", "r"))
-    pipeline = DeepHDPipeline(cfg, num_workers=2)
+    pipeline = DeepHDPipeline(cfg, num_workers=1)
     callback = ModelCheckpoint(dirpath = pipeline.path_model, verbose=True, monitor='val_loss', mode = 'min')
     logger = TensorBoardLogger(save_dir = pipeline.path_model, name = '', version = 0)
     t1 = time.time()
